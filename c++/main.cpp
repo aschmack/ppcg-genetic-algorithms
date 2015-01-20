@@ -1,10 +1,27 @@
 #include "./gamelogic.cpp"
+#include <string.h>
+#include <fstream>
 
+#define ID_BITS 4
+#define SCORE_BITS 3
+#define TOTAL_BITS (ID_BITS+SCORE_BITS)
+#define MAX_SCORE ((int)pow(SCORE_BITS,2)-1)
 
-//moves in a random forward direction
-coord_t randomplayer(dna_t d, view_t v) { 
-    return {1, v.rng.rint(-1, 1)};
-}
+// label that may not be used
+enum direction_lut {
+	UP_RIGHT=0, RIGHT, DOWN_RIGHT
+};
+
+// score index arrays for the 8 movement directions
+static const int sum_lut[3][6] = {
+	{ 2, 3, 4, 8, 9, 14 }, { 8, 9, 13, 14, 18, 19 },
+	{ 14, 18, 19, 22, 23, 24 }
+};
+
+// return values corresponding to the movement directions
+static const coord_t direction_lut[3] = {
+	{ 1, -1 }, { 1, 0 }, { 1, 1 }
+};
 
 //takes (len) bits of DNA as a binary number
 int dnarange(dna_t &d, int start, int len) {
@@ -15,45 +32,58 @@ int dnarange(dna_t &d, int start, int len) {
     return res;
 }
 
-/* linear combination player:
-  makes some number from the sum of
-  color indices multiplied by pieces of
-  the genome, and indexing into a list
-  of moves that aren't out of bounds */
-coord_t lcplayer(dna_t d, view_t v) {
-    const int chunk = DNA_BITS / N_COLORS;
-    int sum = 0;
-
-    for(int i = 0; i < 25; i++) {
-        sum += dnarange(d, i*chunk, chunk) * v(i%5-2, i/5-2);
-    }
-    int nok = 0, ok[3];
-    for(int i = 0; i < 3; i++)
-        if(v(1, i-1) != OUT_OF_BOUNDS)
-            ok[nok++] = i;
-    sum += nok << 10; //because % operator isn't mod
-    int choice = ok[sum % nok];
-    return {1, choice%3-1};
+//go through our "knowledge" and make a map from color->score for
+//quick lookup
+void mapColors(dna_t &d, int* color_array=NULL) {
+	for (int bits = 0; bits < DNA_BITS-TOTAL_BITS; bits += TOTAL_BITS) {
+		int color_id = dnarange(d,bits,ID_BITS);
+		int color_knowledge = (int)dnarange(d,bits+ID_BITS,SCORE_BITS);
+		
+		// If it falls on an odd bit then it is negative knowledge
+		if ( (bits+ID_BITS)%2 == 0 )
+			color_array[color_id]+=color_knowledge;
+		else
+			color_array[color_id]-=color_knowledge;
+	}
 }
 
+coord_t lookAheadPlayer(dna_t d, view_t v) {
+	int scoreArray[25] = { 0 };
+	int seenColors[N_COLORS] = { };
+	mapColors(d, seenColors);
 
-
-
-coord_t colorScorePlayer(dna_t d, view_t v) {
-    const int chunklen = DNA_BITS / N_COLORS;
-    int ymax[3], nmax, smax = -1;
-    for(int y = -1; y <= 1; y++) {
-        if(v(1, y) == OUT_OF_BOUNDS) continue;
-        int score = dnarange(d, v(1, y)*chunklen, chunklen);
-        if(score > smax) {
-            smax = score;
-            nmax = 0;
-        }
-        if(score == smax) ymax[nmax++] = y;
-    }
-    return {1, ymax[v.rng.rint(nmax)]};
+		
+	for (int y=-2; y<=2; y++) {
+		for (int x=0; x<=2; x++) {
+			// Get the scores for our whole field of view
+			color_t color = v(x,y);
+			if (color != OUT_OF_BOUNDS)
+				scoreArray[ (x+2)+((y+2)*5) ] += seenColors[color];
+		}
+	}
+	
+	// get the best move by summing all of the array indices for a particular
+	// direction
+	int best = RIGHT;
+	int bestScore = 0;
+	for (int dir=UP_RIGHT; dir<=DOWN_RIGHT; dir++) {
+		if (v(direction_lut[dir].x, direction_lut[dir].y) == OUT_OF_BOUNDS)
+			continue;
+		
+		int score = 0;
+		for (int i=0; i<6; i++) {
+			score += scoreArray[ sum_lut[dir][i] ];
+		}
+		
+		if (score > bestScore) {
+			bestScore = score;
+			best = dir;
+		}
+	}
+	
+	return direction_lut[best];
 }
 
 int main() {
-    slog << "Geometric mean score: " << runsimulation(colorScorePlayer);
+    slog << "Look ahead score: " << runsimulation(lookAheadPlayer);
 }
